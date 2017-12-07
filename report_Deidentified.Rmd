@@ -1,0 +1,350 @@
+---
+title: "Imbalanced Classification on Bankruptcy Prediction"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+header-includes:
+   - \usepackage{indentfirst}
+   - \usepackage{subfig}
+   - \usepackage{graphicx}
+   - \usepackage{float}
+   - \usepackage{amsmath}
+fontsize: 11pt
+abstract: "Bankruptcy Prediction, which aims to assess the financial condition of a company and its future perspectives within the context of operation on the market, is of great importance in economic decision making and receives extensive research. In this report, an empirical study of bankruptcy prediction is performed on the Polish companies bankruptcy data, mainly focusing on tackling imbalance as well as comparing and selecting models. Initially, Random Forest Imputation is implemented to fill in missing values, and data visualization using PCA and MDS is presented. At first, we ignore the problem of imbalance and compare the performance of different classifiers built with original feature space and principal component scores respectively, using the usual accuracy as evaluation metric. Then we apply different sampling techniques including Synthetic Minority Over-sampling Technique (SMOTE), upsampling and downsampling on the training set, with a new variable recording the number of missing values added to the original features, and compare the performance of different classifiers using the area under ROC curve as a main evaluation metric. Based on the results of the empirical study, we make a comparison of different sampling techniques, and select the most appropriate classifier for bankruptcy prediction. In the end, we discover that the AdaBoost model using downsampling is a simple-to-construct and reliable choice for a high sensitivity classifier. Furthermore, more powerful and more flexible classifiers can be obtained by tuning the decision threshold of the AdaBoost model using SMOTE sampling. The final model raises the sensitivity from the initial 30% to 86%, and retains a 86% specificity at the same time. "
+geometry: margin=0.8in 
+---
+
+```{r setup, include=FALSE}
+setwd("/Users/Carl/Google Drive/2017 winter/503/project")
+knitr::opts_chunk$set(echo = FALSE, fig.align = "center", message = FALSE, warning = FALSE, comment = "  ", fig.pos = "H", cache = TRUE)
+load("project.RData")
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+library(GGally)
+library(dplyr)
+library(stringr)
+```
+
+
+
+# Introduction
+
+## Background
+
+Bankruptcy prediction is of great importance in economic decision making, which aims to assess the financial condition of a company and its future perspectives within the context of longterm operation on the market. Early attempts of bankruptcy prediction are based on traditional statistical methods such as Logistic Regression or Discriminant Analysis. Later on, artifical intelligence techniques including Support Vector Machine and Neural Network were utilized. Recently, ensemble methods such as Bagging or Boosting gain popularity and perform well on bankruptcy prediction. Nevertheless, the imbalance nature of bankruptcy prediction makes the task not easy. This report is an empirical study of bankruptcy prediction based on one real world data set, mainly focusing on tackling imbalance and the comparison of different methods.
+
+## Data Set
+
+The data set is Polish companies bankruptcy data, which contains 5910 observations and 65 variables. The first 64 variables are the predictors, including all sorts of companies' current financial status and properties such as profit, liabilities, and working capital against sales as well as total assets. The 65th variable is the response, with values "Yes" and "No" reflecting whether or not the company will be bankrupt the next year. Only 410 out of 5910 observations are bankrupt, indicating the data is highly imbalanced. Moreover, there exist 4666 missing values in the predictors, so an imputation technique should be performed.
+
+## Objective
+
+First of all, some preprocessing techniques are applied on the original data set and then based on the preprocessed data set, we make some visualization. Next, we divide the data set into training set (70%) and testing set (30%). Different sampling methods are performed on the training set to tackle imbalance, which are then used to construct several different classifiers including Linear Discriminant Analysis, Logistic Regression, K-Nearest Neighbors, Support Vector Machine, Neural Network and some ensemble classifiers including Random Forest, Adaptive Boosting (AdaBoost), Gradient Boosting Machine (GBM), with Decision Tree being base classifier. Then, based on evaluation metrics such as accuracy, sensitivity, specificity and AUC, we compare the performance of different classifiers on testing set.
+
+## Organization of the report
+
+The rest of this report will be presented as the following order:
+
+* Preprocessing and Visualization. To deal with missing values in the original data set, we implement Random Forest Imputation. Then, some visualization of the preprocessed data set are applied.
+
+* Classification without Tackling Imbalance. We construct several classifiers both with the original feature space and principal component space, and compare their performance based on accuracy, sensitivity and specificity.
+
+* Classification with Tackling Imbalance. In addition to adding a new variable `numNA` recording the number of missing values, we implement three sampling techniques and compare the performance of different classifiers.
+
+* Discussion. Based on the performance of different classifiers using different sampling methods, we first make a comparison of the three sampling techniques, and then select the classifier that is most suitable for bankruptcy prediction.
+
+# Preprocessing and Visualization
+
+## Preprocessing
+
+In the original data set, there exist 4666 missing values, where `Attr37` has the largest missing rate (43.11%), while other variables has much smaller missing rate (less than 7%). We implement simple deletion for `Attr37` and multiple imputation for other variables. Compared with other popular multiple imputation methods including K-Nearest Neighbours Imputation and Multivariate Imputation using Chained Equations, Random Forest Imputation which uses a random forest trained on the observed values of a data matrix to predict the missing values, is more suitable for tackling high-dimensional data especially when there exist complex interactions among variables. Therefore, considering the high-dimensional nature of the data set, we decide to apply Random Forest Imputation. Specifically we impute missing values with all predictors excluding `Attr37`. Also the class information is not used in the imputation, as we assume that the true values of the missing data do not depend on class.
+
+## Visualization
+
+The left panel of Figure 1 is a visualization of the correlation matrix of 63 predictors in the preprocessed data set, where different colors correspond to different correlation level. From this plot, we find that some of the predictors are highly correlated, indicating that some dimension reduction techniques should be implemented before classification.
+
+The right panel of Figure 1 is a collection of boxplots for 63 predictors with respect to different class labels, where outliers are removed for better visualization. From this plot, we find that for different class labels, there does not exist obvious difference in distribution for most of the predictors, indicating that single predictor could not distinguish class label.
+
+```{r}
+library(reshape2)
+data = dat
+corr_mat = cor(data[,-64])
+
+# Use hierarchical clustering to order
+dist_temp = as.dist(1-corr_mat)
+hc = hclust(dist_temp)
+corr_mat = corr_mat[hc$order, hc$order]
+
+# Remove upper triangle
+corr_mat_lower = corr_mat
+corr_mat_lower[upper.tri(corr_mat_lower)] = NA
+
+# Melt correlation matrix and make sure order of factor variables is correct
+corr_mat_melted = melt(corr_mat_lower)
+corr_mat_melted$Var1 = factor(corr_mat_melted$Var1, levels=colnames(corr_mat))
+corr_mat_melted$Var2 = factor(corr_mat_melted$Var2, levels=colnames(corr_mat))
+
+# Plot
+corr_plot = ggplot(corr_mat_melted, aes(x=Var1, y=Var2, fill=value)) +
+geom_tile(color='white') +
+scale_fill_distiller(limits=c(-1, 1), palette='RdBu', na.value='white',
+name='Correlation') +
+coord_fixed(ratio=1) +
+theme_minimal() +
+scale_y_discrete(position="right") +
+theme(axis.text.x=element_blank(),
+axis.text.y=element_blank(),
+axis.title.x=element_blank(),
+axis.title.y=element_blank(),
+panel.grid.major=element_blank(),
+legend.position=c(0.1,0.9),
+legend.justification=c(0,1))
+```
+
+ 
+
+```{r, fig.height=3, fig.width=7, fig.cap="Heat map and box plots"}
+p = lapply(1:63, function(i) {
+ggplot(dat,
+aes(x = class, y = dat[,i], color = class)) +
+geom_boxplot(outlier.shape = NA) +
+scale_y_continuous(limits = quantile(dat[,i], c(0.1, 0.9))) +
+theme(axis.title = element_blank(), legend.position = "none", axis.text = element_blank(), axis.ticks = element_blank(), plot.margin = unit(rep(1, 4), "mm"))
+})
+
+g_legend = function(a.gplot){
+tmp = ggplot_gtable(ggplot_build(a.gplot))
+leg = which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+legend = tmp$grobs[[leg]]
+return(legend)
+}
+
+mylegend = g_legend(ggplot(dat, aes(x = class, y = dat[, 1], color = class)) + geom_boxplot(outlier.shape = NA) + scale_y_continuous(limits = quantile(dat[,1], c(0.1, 0.9))) + theme(legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 5), legend.title = element_text(size = 7)))
+
+
+grid.arrange(corr_plot, do.call("arrangeGrob", c(p, ncol = 7)), mylegend, ncol = 3, widths=c(10, 10, 1))
+```
+
+There are numerous dimension reduction techniques that could be applied for visualization, among which Principal Component Analysis and Multidimensional Scaling are most popular.
+
+First, we visualize the observations in the preprocessed data set with Principal Component Analysis. From the left panel of Figure 2 which projects observations onto the first two principal components, we find that observations of different class labels are not well separated, indicating that classification cannot be implemented on low-dimensional space.
+
+Second, we visualize the predictors in the preprocessed data set with Multidimensional Scaling. From the right panel of Figure 2 which projects predictors onto the two-dimensional space, we find that there exist some clusters, indicating that some of the predictors are highly correlated, which further suggests that some dimension reduction techniques should be implemented before classification.
+
+```{r, fig.width=7, fig.height=3, fig.cap="PCA Projection and MDS Projection"}
+tr.pca = princomp(train[, -64], cor = TRUE)
+varpercent = cumsum(tr.pca$sdev^2) / sum(tr.pca$sdev^2)
+scores = data.frame(tr.pca$scores[, 1:2])
+scores$class = train$class
+plot_1 = ggplot(scores, aes(Comp.1, Comp.2, color = class)) + geom_point(alpha = 0.5) +
+xlim(c(-1, 1)) + ylim(c(-2, 2)) + theme(axis.title = element_text(size = 8), legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 6), legend.title = element_text(size = 8), axis.text = element_text(size = 6))
+# almost 99% of data points are in this region
+dist = 1 - abs(cor(train[, -64]))
+attr.mds = cmdscale(dist, k = 2)
+attr.mds = as.data.frame(attr.mds)
+attr.mds$label = str_sub(names(bank)[-64], start = 5)
+names(attr.mds)[1:2] = c("D1", "D2")
+plot_2 = ggplot(attr.mds, aes(D1, D2)) + geom_text(label = attr.mds$label, position = position_jitter(height = 0.03, width = 0.03), size = 2) + theme(axis.title = element_text(size = 8), axis.text = element_text(size = 6))
+grid.arrange(plot_1, plot_2, ncol=2)
+```
+
+
+# Classification without Tackling Imbalance
+
+The severe imbalance of the original dataset suggests against using straight-forward classification methods without any modification. But for the sake of comparison, we run a few commonly used classifiers on the raw dataset (after imputation) and report their performance on training data and test data. We then operate the same set of classifiers with only the first twenty principal components and see if there is a significant improvement. Note that the classifiers implemented in this section already have their parameters, if any, tuned within certain grids of values using repeated cross-validation (10-fold, repeat 5 times) to have the optimal performance. 
+
+## Without PCA
+
+The classification methods in this section include LDA, logistic regression, kNN, SVM, neural network, random forest, AdaBoost, and gradient boosting machine. The accuracy, sensitivity (true positive rate) and specificity (true negative rate) of predictions on training and test sets are reported to compare the performance. Sensitivity and specificity are calculated with bankrupt companies being the positive class. 
+
+```{r}
+kable(table.orig, caption = "training and test accuracy")
+```
+
+From this table we can see that all of these classifiers have decent accuracy on both training and test sets. However, a further inspection on the sensitivity and specificity could reveal that the high accuracy is usually achieved via classifying most of the cases as positive, the extreme cases being SVM and neural network, with 0% sensitivity and 100% specificity. 
+
+Among these classifiers, random forest performs fairly well on the original data. It fits the training set perfectly and achieves some degree of accuracy at identifying the positive cases (35.77% sensitivity). AdaBoost and GBM yield similar results on test set but have lower sensitivity on training set. Logistic regression has the best sensitivity on test set (43.09%), but it also has lower specificity compared to other models. 
+
+## With PCA
+
+The first 20 principal components already take up 90% of the total variance. Now we run the same classification methods on the dataset of the PC scores. 
+
+```{r}
+kable(table.pca, caption = "training and test accuracy")
+```
+
+From the results we can see that PCA doesn't really improve the models. For many classifiers we actually get worse accuracy. For instance random forest now has much lower sensitivity. This might be due to the fact that random forest usually doesn't suffer from high dimension. By reducing dimension with PCA, we lose some of the variability and as a result get a worse random forest model. LDA and logistic regression both obtain high sensitivity and low specificity and low accuracy on test set. 
+
+# Classification with Tackling Imbalance
+
+## Strategies
+
+### Sampling Method
+
+Various kinds of techniques have been proposed for dealing with class imbalance, including upsampling the minority class, downsampling the majority class and synthetic minority upsampling technique (SMOTE). 
+
+upsampling, a.k.a upsampling, is a method that mainly deals with minority class, while downsampling aims at majority class. SMOTE is a sampling method that generates artificial minority samples based on the feature space similarities in order to shrink the learning bias of the minority class.
+
+We experimented all three sampling methods on the dataset. Each one of them results in significant improvement on identifying positive cases. We will report their performance and discuss their pros/cons later. 
+
+### Evaluation Metric
+
+In addition, for binary classification with imbalance classes, the area under the Receiver Operating Characteristic curve (ROC AUC) is a more suitable evaluation metric. The ROC curve is a two-dimensional measure of classification performance that plots the True Positive Rate (sensitivity) against the False Positive Rate (specificity). From the following confusion matrix, True Positive Rate and False Positive Rate are calculated as below.
+
+$$True\ Positive\ Rate	= TP / (TP + FN)$$
+$$True\ Negative\ Rate = TN / (TN + FP)$$
+
+\begin{figure}[H]
+	\includegraphics{figure/confu.png}
+	\centering
+\end{figure}
+
+In our analysis, upsampling, downsampling and SMOTE are performed on the preprocessed data set and ROC is used as a comparison metric.
+
+### Adding a New Variable
+
+This strategy doesn't necessarily address the imbalance issue directly. But after experimenting with different pre-processed datasets, we discover that adding a new variable `numNA` that records the number of missing values, excluding the deleted attribute, in each observation brings considerable improvement to the classifiers' performance. By visualizing the distribution of `numNA` (see Figure 3), we can see that the vast majority of not bankrupt companies have no missing values, whereas over half of the bankrupt companies are expected to have at least one. Especially in tree-based models, this predictor can be used to form very informative split rules. 
+
+```{r, fig.cap="distribution of the number of NA", fig.height=2.5, fig.width=4}
+prop1 = mean(train.na$numNA[train$class == "Yes"] > 0)
+prop2 = mean(train.na$numNA[train$class == "No"] > 0)
+dat.temp = data.frame(legend = c("Yes", "Yes", "No", "No"), number_of_NA = c("None", "At least 1", "None", "At least 1"), proportion = c(1 - prop1, prop1, 1 - prop2, prop2))
+ggplot(dat.temp, aes(x = number_of_NA, y = proportion, fill = legend)) + geom_col(position = "dodge", width = 0.5) +
+  ylim(c(0, 1))
+```
+
+
+## Results with different sampling methods
+
+We tried most combinations of the pre-processing methods, sampling methods and different metrics mentioned above. To avoid verbosity, only the results using ROC AUC metric with `numNA` added to the imputed dataset are shown, since this combination usually results in the best performance for each of the classifiers tested in this project. Also, the three sampling methods are applied to the training set during the model training in order to compare their differences. Note that we are using the `train` function in R package `caret` to do all the model training. The sampling process happens in the background during the subsetting of cross-validation. So by doing the a repeated cross-validation (one of `train` function's preset resampling method), we can get fairly accurate error rate estimates without the CV test sets being affected by sampling. 
+
+### SMOTE Sampling
+
+```{r, fig.width=5.5, fig.height=3.5, fig.cap="Accuracy and ROC Results on SMOTE Sampling"}
+kable(table.smote, caption = "training and test accuracy")
+kable(roc.smote, caption = "cross validation mean and SD")
+p1 = ggparcoord(mutate(table.smote, methods = rownames(table.smote)), scale = "globalminmax", columns = 1:6, groupColumn = 7) + theme(axis.title = element_blank(), legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 4), legend.title = element_text(size = 8))
+p2 = ggparcoord(mutate(roc.smote, methods = rownames(table.smote)), scale = "globalminmax", columns = 1:3, groupColumn = 7) + theme(axis.title = element_blank(), legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 6), legend.title = element_text(size = 8))
+grid.arrange(p1, p2, nrow = 2)
+```
+
+As is shown in Figure 4, for the overall performance, the Random Forest, AdaBoost and GBM show a high performace for both training and testing set. The rest methods' accuracy exhibit an apparent pattern of imbalance.
+
+For most of the methods, the overall accuracy is similiar to specificity(TN Rate), and the sensitivity(TP Rate) is lower than specificity, which means that if the company is actually bankrupted, th models are less likely to detect its bankruptcy. Surprisingly, Logistic Regression shows a relatively high sensitivity, compared to its overall accuracy and specificity. 
+
+For ROC table, Random Forest, AdaBoost, and GBM also indicate their nice performance in terms of ROC and CV sensitivity as well as specificity. Meanwhile, the CV sensitivity is much lower than the specifivity. The CV standard deviations of the sensitivity and specificity of logistic regression are very high, indicating a highly unreliable performance. 
+
+### Upsampling
+
+```{r, fig.width=5.5, fig.height=3.5, fig.cap="Accuracy and ROC Results on Up Sampling"}
+kable(table.up, caption = "training and test accuracy")
+kable(roc.up, caption = "cross validation mean and SD")
+p1 = ggparcoord(mutate(table.up, methods = rownames(table.up)), scale = "globalminmax", columns = 1:6, groupColumn = 7) + theme(axis.title = element_blank(), legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 6), legend.title = element_text(size = 8))
+p2 = ggparcoord(mutate(roc.up, methods = rownames(table.up)), scale = "globalminmax", columns = 1:3, groupColumn = 7) + theme(axis.title = element_blank(), legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 6), legend.title = element_text(size = 8))
+grid.arrange(p1, p2, nrow = 2)
+```
+
+According to Figure 5, different from result of SMOTE sampling, the performance of Random Forest and AdaBoost is not consistent. With respect to sensitivity for testing set, the AdaBoost and Random Forest are relatively low. GBM remains stable within all the performance measures. The performance of logistic regression is even more unreliable when using upsampling. 
+
+### Downsampling
+
+```{r, fig.width=5.5, fig.height=3.5, fig.cap="Accuracy and ROC Results on Down Sampling"}
+kable(table.down, caption = "training and test accuracy")
+kable(roc.down, caption = "cross validation mean and SD")
+p1 = ggparcoord(mutate(table.down, methods = rownames(table.down)), scale = "globalminmax", columns = 1:6, groupColumn = 7) + theme(axis.title = element_blank(), legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 6), legend.title = element_text(size = 8))
+p2 = ggparcoord(mutate(roc.down, methods = rownames(table.down)), scale = "globalminmax", columns = 1:3, groupColumn = 7) + theme(axis.title = element_blank(), legend.key.size = unit(0.6, "line"), legend.text = element_text(size = 6), legend.title = element_text(size = 8))
+grid.arrange(p1, p2, nrow = 2)
+```
+
+When the sampling method is down sampling, the Random Forest, AdaBoost, and GBM, which are shown in Figure 6, again are the least affected by the imbalance and have the best overall performance. While LDA has the highest overall accuracy and specificity on both training and testing set, it has a very poor sensitivity, meaning its ability to detect bankrupt companies is really bad. Therefore, if our requirement is to detect as many bankrupt companies as possible, LDA is apparently not a desirable model. Also, other methods' results are still unpromising.
+
+## Conclusion
+
+Based on all three sampling methods, the SMOTE methods has a best resistance on the imbalanced data. And Random Forest, AdaBoost and GBM have the overall best performance in dealing with the imbalanced data. Among those three classification methods, GBM is the most stable method and remains high overall accuracy rate, sensitivity, and specificity in terms of training and testing set. 
+
+
+# Discussion
+
+## Comparison across the three sampling techniques
+
+Comparing the results in section 3 and section 4, we can observe that the performance of classfiers receive massive improvements after implementing sampling techniques, ROC metric, and the addition of new variable `numNA`. But of course the results vary with different sampling techniques used in the model. Next we discuss the different behaviors of each of the sampling techniques in this classification problems. 
+
+The advantage of upsampling is that it retains all the information in the training set. Also since the positive cases are replicated around 15 times, one single misclassification of a positive case will result in 15 errors. So essentially oversampling assigns a higher cost on false negative errors in the training set. But bear in mind there's no such replication in the test set. So the replication of minority cases could lead to overfitting. This can be seen in Table 5. For the RF and AdaBoost models, the training accuracy, sensitivity and specificity are almost perfect, yet the test sensitivity is far lower than that of using SMOTE sampling, despite some improvement on test accuracy and specificity. In addition, using oversampling in this problem almost doubles the sample size. So the increase in computational burden is also quite considerable. 
+
+In contrast, downsampling offers computational ease. And there is no replication so overfitting is usually not a problem. From Table 7 and Table 8, we can see that models with downsampling tend to have higher sensitivity and lower specificity compared to the other two sampling techniques. For AdaBoost and GBM models, both the CV estimates of sensitivity and specificity are around 85%. So they can be great candidates if the focus is to find models that have high sensitivity yet still retain a reasonable specificity. The disadvantage of downsampling is of course the loss of information. Although from the results in section 4.2.3, no significant drop in performance can be seen other than the slightly lower ROC and overall accuracy compared to the other two sampling methods. 
+
+SMOTE sampling is a combination of upsampling and downsampling. It uses the existing minority cases to synthesize new artificial samples, and at the same time randomly samples a subset of the majority cases. The resulting balanced dataset is usually smaller than the original dataset but larger than the output of downsampling. It combines many of the advantages of upsampling and downsampling, like computational ease and a limited loss of information. But because SMOTE synthesize new samples by doing interpolation with existing data, it can only creates samples within current minority regions. In our models, using SMOTE sampling usually results in high ROC and high overall accuracy. The sensitivity is usually not as high as that of using downsampling, but in return the specificity is not sacrificed as much, which means not too many false positives.
+
+## Model selection
+
+Next we determine which models should be the optimal choices in application. For any binary classification problem, there is always a trade-off between the sensitivity and specificity. The choice of model can depend on the classification goal. In this case, misclassifying a will-be bankrupt company as not bankrupt is usually assumed to be much more costly than the other way around. Therefore the ideal model should be able to correctly identify as many positive cases as possible. That being said, specificity can't be ignored either, as a low specificity will make the positive predictions less credible, an example being the logistic regression model in section 3.2, where the sensitivity on test set reaches 90% but only one twelfth of the positive predictions are true positive (confusion matrix see below). So here we are looking for classifiers that maximize sensitivity without losing too much specificity. 
+
+```{r}
+model.logis.pca$table
+```
+
+Based on the tables in section 4, the model with the highest cross validation average of sensitivity is the AdaBoost model using downsampling. Among all the models using downsampling, the AdaBoost model also has the highest ROC AUC average and the highest specificity. And its small cross validation SD suggests that the model's prediction performance is quite stable. The confusion matrix indicates that about one third of the positive predictions are true positive. It's not perfect, but still acceptable considering the imbalance of the two classes. With both sensitivity and specificity at around 85%, the AdaBoost model should be a decent classifier for this problem. 
+
+```{r}
+model.na.ada.down$table = model.na.ada.down$table[, c(2, 1)]
+colnames(model.na.ada.down$table) = c("Yes", "No")
+model.na.ada.down$table
+```
+
+Moreover, we can take a look at the predicted class probabilities of the AdaBoost model to get a clearer idea about how well the classifier separates the two classes. Figure six is a visualization of the predicted class probabilities on training set and test set. We can see that the classfier separates the classes fairly well. For most positive cases, the AdaBoost classifier assigns very close to 1 probability. That is true for even the test set, though a few positive cases are assigned close to 0 probability. For the negative cases, there are quite a lot of false negatives. Although that is the price to pay in order to get the high sensitivity. 
+
+```{r, fig.width=12, fig.height=5, fig.cap="distribution of predicted class probabilities"}
+p1 = model.na.ada.down$plot.train + ggtitle("training set")
+p2 = model.na.ada.down$plot.test + ggtitle("test set")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+It is also viable to select the AdaBoost and GBM models with SMOTE sampling, since they both have very high ROC and reasonable sensitivity. In fact, their sensitivity still has room for improvement. Instead of naively using 0.5 as the decision threshold, we can choose thresholds that lead to better sensitivity based on the repeated cross-validation results. By lowering the threshold, more cases will be classified as positive, thus increasing the sensitivity. Inevitably, this would also mean a lower specificity. The task is to find the sweet spot between sensitivity and specificity. 
+
+```{r, fig.width=12, fig.height=5, fig.cap="Performance of models under different thresholds"}
+ggplot(datL, aes(threshold, value, color = legend, shape = legend, linetype = legend)) + geom_point() + geom_line() + facet_grid(. ~ method)
+```
+
+Figure 8 shows us how sensitivity and specificity vary with the change of decision threshold. Based on this plot, one can selects the most suitable threshold according to the desired sensitivity and specificity levels. It is worth mentioning that threshold doesn't affect the performance of AdaBoost model as drastically as it does GBM model, which implies that the AdaBoost model tend to get class probability close to 0 and 1, with not many cases in between. This is confirmed in Figure 9. We can observe that the class probability has a more coherent distribution in GBM model (notice the difference of the violin plots in these two models). 
+
+```{r, fig.width=12, fig.height=5, fig.cap="distribution of predicted class probabilities on test set"}
+p1 = model.na.ada.smote$plot.test + ggtitle("AdaBoost")
+p2 = model.na.gbm.smote$plot.test + ggtitle("GBM")
+grid.arrange(p1, p2, ncol = 2)
+```
+
+Table 9 illustrates a few instances of changing the threshold of AdaBoost model using SMOTE sampling. It is quite surprising that we can set the threshold as low as 0.05, and still be able to have sensitivity and specificity exceeding 86%, which is even higher than that of the AdaBoost model using downsampling. This shows the importance of not blindly using the default 0.05 threshold. Table 10 shows some examples for the GBM model. The performance is very close to the AdaBoost model, but slightly worse. 
+
+```{r}
+temp = bind_rows(lapply(seq(0.05, 0.2, by = 0.05), cv_thres_ada))
+temp[, 2:5] = round(temp[, 2:5], digits = 4)
+kable(temp, caption = "performance of AdaBoost under different thresholds")
+temp = bind_rows(lapply(seq(0.25, 0.4, by = 0.05), cv_thres_gbm))
+temp[, 2:5] = round(temp[, 2:5], digits = 4)
+kable(temp, caption = "performance of GBM under different thresholds")
+```
+
+In conclusion, if the goal is to find a classifier with high sensitivity and high specificity, the AdaBoost model using SMOTE sampling with a threshold at 0.05 can yield over 86% sensitivity and specificity. If more focus is placed on identifying positive cases, then a more fitting model can be derived by further tuning down the threshold. Similarly, we can also raise the threshold to get a model that gets fewer false positive predictions. In general, the model choice is not definitive. It usually requires comparison among multiple candidates to suit specific classification needs. 
+
+# Reference
+
+[1] Bradley, A. P. (1997). The use of the area under the ROC curve in the evaluation of machine learning algorithms. Pattern Recognition, 30(7), 1145:1159.
+
+[2] Chawla, N. V., Bowyer, K. W., Hall, L. O., & Kegelmeyer, W. P. (2002). SMOTE: synthetic minority upsampling technique. Journal of Artificial Intelligence Research, 16(1), 321:357.
+
+[3] Atiya, A. F. (2001). Bankruptcy prediction for credit risk using neural networks: a survey and new results. IEEE Transactions on Neural Networks, 12(4), 929:935.
+
+[4] Tsai, C.-F., & Wu, J.-W. (2008). Using neural network ensembles for bankruptcy prediction and credit scoring. Expert Systems with Applications, 34, 2639:2649.
+
+[5] Breiman, L., 1996. Bagging predictors. Machine learning 24, 123:140.
+
+[6] Friedman, J.H., 2001. Greedy function approximation: a gradient boosting machine. Annals of statistics , 1189:1232.
+
+[7] Chen, C., Liaw, A., & Breiman, L. (2004). Using random forest to learn imbalanced data, Technical Report 666. Statistics Department of University of California at Berkeley.
+
+[8] Dietterich, T. G. (2000b). An experimental comparison of three methods for constructing ensembles of decision trees: Bagging, boosting, and randomization. Machine Learning, 40(2), 139:157.
+
+
+
